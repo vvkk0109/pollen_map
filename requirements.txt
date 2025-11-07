@@ -6,3 +6,4 @@ matplotlib
 folium
 shapely
 pyproj
+streamlit_folium
