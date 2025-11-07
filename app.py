@@ -2,56 +2,107 @@ import streamlit as st
 import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
+import zipfile
+import os
+import glob
 import random
-import zipfile, os, glob
-import pandas as pd
 
-st.set_page_config(page_title="🌳 수종별 지도 뷰어", layout="wide")
+st.set_page_config(page_title="🌳 전주시 수종 지도", layout="wide")
+st.title("🌳 전주시 수종 지도")
 
-st.title("🌳 수종별 지도 뷰어")
-st.write("임상도 Shapefile(.zip)을 업로드하고, 수종을 선택하면 지도에 표시됩니다.")
+# 폴더 생성
+os.makedirs("species_data", exist_ok=True)
+os.makedirs("boundary_data", exist_ok=True)
 
-uploaded_file = st.file_uploader("📂 Shapefile ZIP 업로드", type=["zip"])
+# 1️⃣ 수종 데이터 ZIP 업로드 (여러 개)
+uploaded_species_files = st.file_uploader(
+    "🌲 수종 데이터 ZIP 업로드 (여러 개 선택 가능)", 
+    type="zip", 
+    accept_multiple_files=True
+)
 
-if uploaded_file:
-    extract_folder = "data"
-    os.makedirs(extract_folder, exist_ok=True)
-    
-    # ZIP 해제
-    with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
+# 2️⃣ 전주시 경계 ZIP 업로드 (1개)
+uploaded_boundary_file = st.file_uploader(
+    "🗺️ 전주시 경계 ZIP 업로드", 
+    type="zip"
+)
+
+gdf = None
+jeonju_gdf = None
+
+# --- 수종 데이터 처리 ---
+if uploaded_species_files:
+    species_gdfs = []
+    for uploaded_file in uploaded_species_files:
+        zip_path = os.path.join("species_data", uploaded_file.name)
+        with open(zip_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        # ZIP 풀기
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            extract_folder = os.path.join("species_data", uploaded_file.name.split(".")[0])
+            os.makedirs(extract_folder, exist_ok=True)
+            zip_ref.extractall(extract_folder)
+        shp_files = glob.glob(os.path.join(extract_folder, "*.shp"))
+        if shp_files:
+            gdf_file = gpd.read_file(shp_files[0])
+            if gdf_file.crs != "EPSG:4326":
+                gdf_file = gdf_file.to_crs(epsg=4326)
+            species_gdfs.append(gdf_file)
+    if species_gdfs:
+        gdf = gpd.GeoDataFrame(pd.concat(species_gdfs, ignore_index=True))
+        st.success(f"✅ 수종 데이터 불러오기 완료! (총 {len(gdf)} 행)")
+
+# --- 전주시 경계 처리 ---
+if uploaded_boundary_file:
+    boundary_zip_path = os.path.join("boundary_data", uploaded_boundary_file.name)
+    with open(boundary_zip_path, "wb") as f:
+        f.write(uploaded_boundary_file.getbuffer())
+    with zipfile.ZipFile(boundary_zip_path, "r") as zip_ref:
+        extract_folder = os.path.join("boundary_data", uploaded_boundary_file.name.split(".")[0])
+        os.makedirs(extract_folder, exist_ok=True)
         zip_ref.extractall(extract_folder)
-    
-    # shapefile 탐색
     shp_files = glob.glob(os.path.join(extract_folder, "*.shp"))
-    if not shp_files:
-        st.error("❌ Shapefile(.shp)을 ZIP 안에서 찾을 수 없습니다.")
+    if shp_files:
+        jeonju_gdf = gpd.read_file(shp_files[0])
+        if gdf is not None and jeonju_gdf.crs != gdf.crs:
+            jeonju_gdf = jeonju_gdf.to_crs(gdf.crs)
+        st.success(f"✅ 전주시 경계 불러오기 완료! (총 {len(jeonju_gdf)} 행)")
+
+# --- 수종 선택 ---
+if gdf is not None and jeonju_gdf is not None:
+    species_col = "KOFTR_NM"
+    if species_col not in gdf.columns:
+        st.error(f"❌ '{species_col}' 컬럼이 없습니다.")
     else:
-        shp_path = shp_files[0]
-        st.success(f"✅ {os.path.basename(shp_path)} 파일을 불러왔습니다.")
+        species_list = sorted(gdf[species_col].dropna().unique())
+        selected_species = st.multiselect("🌿 수종 선택", options=species_list)
         
-        # 데이터 불러오기
-        gdf = gpd.read_file(shp_path)
-        if gdf.crs != "EPSG:4326":
-            gdf = gdf.to_crs(epsg=4326)
-        
-        # 수종 컬럼
-        species_col = "KOFTR_NM"
-        if species_col not in gdf.columns:
-            st.error(f"'{species_col}' 컬럼을 찾을 수 없습니다. 실제 컬럼명을 확인하세요.")
-        else:
-            species_list = sorted(gdf[species_col].dropna().unique())
-            selected_species = st.multiselect("🌲 지도에 표시할 수종 선택", species_list)
-            
-            if selected_species:
-                filtered_gdf = gdf[gdf[species_col].isin(selected_species)]
-                center = [
-                    filtered_gdf.geometry.centroid.y.mean(),
-                    filtered_gdf.geometry.centroid.x.mean()
-                ]
-                m = folium.Map(location=center, zoom_start=9)
-                
+        if selected_species:
+            # 필터링
+            filtered_gdf = gdf[gdf[species_col].isin(selected_species)]
+            if len(filtered_gdf) == 0:
+                st.warning("⚠️ 선택한 수종이 데이터에 없습니다.")
+            else:
+                # 지도 중심 계산
+                center = [filtered_gdf.geometry.centroid.y.mean(),
+                          filtered_gdf.geometry.centroid.x.mean()]
+                m = folium.Map(location=center, zoom_start=11)
+
+                # 전주시 경계 추가
+                folium.GeoJson(
+                    jeonju_gdf,
+                    name="전주시 경계",
+                    style_function=lambda x: {
+                        'fillColor': 'transparent',
+                        'color': 'black',
+                        'weight': 2
+                    },
+                    tooltip="전주시"
+                ).add_to(m)
+
+                # 수종별 색상
                 color_map = {s: f'#{random.randint(0, 0xFFFFFF):06x}' for s in selected_species}
-                
+
                 for _, row in filtered_gdf.iterrows():
                     sname = row[species_col]
                     folium.GeoJson(
@@ -64,8 +115,8 @@ if uploaded_file:
                             'fillOpacity': 0.6
                         }
                     ).add_to(m)
-                
-                st_folium(m, width=900, height=600)
-            else:
-                st.info("👈 왼쪽에서 수종을 선택하세요.")
+
+                # Streamlit에 지도 표시
+                st_folium(m, width=700, height=500)
+
 
