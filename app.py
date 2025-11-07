@@ -17,34 +17,26 @@ jeonju_gdf = None
 
 st.title("🌳 전주시 수종 지도")
 
-# 1️⃣ 수종 데이터 여러 ZIP 업로드 가능
-species_zips = st.file_uploader(
-    "🌲 수종 데이터 ZIP 업로드 (여러 개 가능)", type=["zip"], accept_multiple_files=True
-)
+# 1️⃣ 수종 데이터 업로드
+species_zip = st.file_uploader("🌲 수종 데이터 ZIP 업로드", type=["zip"])
+if species_zip is not None:
+    with zipfile.ZipFile(species_zip, "r") as zip_ref:
+        extract_folder = "species_data"
+        os.makedirs(extract_folder, exist_ok=True)
+        zip_ref.extractall(extract_folder)
 
-if species_zips:
-    species_gdfs = []
-    for species_zip in species_zips:
-        with zipfile.ZipFile(species_zip, "r") as zip_ref:
-            extract_folder = "species_data"
-            os.makedirs(extract_folder, exist_ok=True)
-            zip_ref.extractall(extract_folder)
-
-        shp_files = glob.glob(os.path.join(extract_folder, "*.shp"))
-        for shp in shp_files:
-            species_gdfs.append(gpd.read_file(shp))
-
-    if species_gdfs:
-        gdf = gpd.GeoDataFrame(pd.concat(species_gdfs, ignore_index=True))
+    shp_files = glob.glob(os.path.join(extract_folder, "*.shp"))
+    if shp_files:
+        gdf = gpd.GeoDataFrame(pd.concat([gpd.read_file(shp) for shp in shp_files], ignore_index=True))
         if gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs(epsg=4326)
         st.success(f"✅ 수종 데이터 불러오기 완료! (행 수: {len(gdf)})")
     else:
         st.error("❌ .shp 파일을 찾을 수 없습니다!")
 
-# 2️⃣ 전주시 경계 ZIP 업로드
+# 2️⃣ 전주시 경계 업로드
 boundary_zip = st.file_uploader("🗺️ 전주시 경계 ZIP 업로드", type=["zip"])
-if boundary_zip:
+if boundary_zip is not None:
     with zipfile.ZipFile(boundary_zip, "r") as zip_ref:
         boundary_folder = "boundary_data"
         os.makedirs(boundary_folder, exist_ok=True)
@@ -110,6 +102,7 @@ if gdf is not None and jeonju_gdf is not None:
 
                 # 지도 표시
                 st_folium(m, width=1200, height=800)
+
 
 
 
